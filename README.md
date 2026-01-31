@@ -57,6 +57,7 @@ State Management: Remote S3 Backend with DynamoDB locking to prevent state corru
 
 📂 Project Structure
 The project follows a modular architecture inspired by Cloud Posse standards for reusability and context management.
+```bash
 .
 ├── .github/workflows   # CI/CD Pipelines (Plan & Apply)
 ├── modules/            # Reusable Terraform Modules
@@ -67,3 +68,4 @@ The project follows a modular architecture inspired by Cloud Posse standards for
 ├── main.tf             # Root Orchestrator
 ├── variables.tf        # Global Configuration Inputs
 └── locals.tf           # Naming Convention Logic
+`` ``` ``
