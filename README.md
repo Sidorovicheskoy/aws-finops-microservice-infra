@@ -30,7 +30,7 @@ graph TD
     end
     ALB -->|Traffic| ECS
     ECS -->|Outbound| NAT
-
+```mermaid
 ## 🚀 Key Features
 🛡️ Security First
 Network Isolation: Compute resources (ECS Tasks) are deployed in Private Subnets with no direct internet access.
