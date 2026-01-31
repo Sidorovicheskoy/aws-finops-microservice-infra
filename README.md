@@ -68,4 +68,3 @@ The project follows a modular architecture inspired by Cloud Posse standards for
 ├── main.tf             # Root Orchestrator
 ├── variables.tf        # Global Configuration Inputs
 └── locals.tf           # Naming Convention Logic
-`` ``` ``
