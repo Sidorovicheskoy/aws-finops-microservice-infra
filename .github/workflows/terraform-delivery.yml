@@ -1,0 +1,174 @@
+﻿name: "🚀 Infrastructure Delivery Pipeline"
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**.tf'
+      - '.github/workflows/**'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '**.tf'
+
+permissions:
+  id-token: write       # Required for AWS OIDC authentication
+  contents: read        # Required to checkout the code
+  pull-requests: write  # Required to post the Plan comment
+
+env:
+  # --------------------------------------------------------
+  # CONFIGURATION CONTEXT
+  # --------------------------------------------------------
+  AWS_REGION: "eu-central-1"
+  TF_VERSION: "1.7.0"
+  WORKING_DIR: "."      # Root directory (or ./terraform if nested)
+  
+  # Secrets managed in GitHub Repo Settings -> Secrets
+  IAM_ROLE_PLAN: ${{ secrets.AWS_ROLE_ARN_PLAN }}   
+  IAM_ROLE_APPLY: ${{ secrets.AWS_ROLE_ARN_APPLY }}
+
+jobs:
+  # ========================================================
+  # STAGE 1: COMPLIANCE & SECURITY
+  # Purpose: Fail fast if code is dirty or insecure.
+  # ========================================================
+  compliance:
+    name: "🛡️ Compliance & Security"
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: 🎨 Check Formatting
+        run: terraform fmt -check -recursive
+        continue-on-error: false
+
+      - name: 🕵️ Static Analysis (tfsec)
+        uses: aquasecurity/tfsec-action@v1.0.0
+        with:
+          soft_fail: true # Set to false to block build on security risks
+          additional_args: --concise-output
+
+  # ========================================================
+  # STAGE 2: PLANNING (Runs on PR)
+  # Purpose: Generate an execution plan and report to PR.
+  # ========================================================
+  plan:
+    name: "📝 Infrastructure Planning"
+    needs: compliance
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIR }}
+
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: ☁️ Authenticate to AWS (OIDC - ReadOnly)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.IAM_ROLE_PLAN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActionsPlanSession
+
+      - name: 🔧 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: 🏗️ Terraform Init
+        run: terraform init -no-color
+
+      - name: 🔍 Terraform Validate
+        run: terraform validate -no-color
+
+      - name: 📜 Terraform Plan
+        id: plan
+        run: |
+          terraform plan -no-color -out=tfplan
+        continue-on-error: true
+
+      # --- GitOps Magic: Commenting on PR ---
+      - name: 💬 Update PR with Plan
+        uses: actions/github-script@v6
+        if: github.event_name == 'pull_request'
+        env:
+          PLAN: "terraform\n${{ steps.plan.outputs.stdout }}"
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // 1. Prepare the output
+            const output = `#### 🏗️ Terraform Plan Report
+            
+            | Stage | Status |
+            | :--- | :--- |
+            | **Format** | ✅ Passed |
+            | **Security** | ⚠️ Checked (See logs) |
+            | **Plan** | \`${{ steps.plan.outcome }}\` |
+            
+            <details><summary><b>🔻 Show detailed execution plan</b></summary>
+            
+            \`\`\`\n
+            ${process.env.PLAN}
+            \`\`\`
+            
+            </details>
+            
+            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Working Dir: \`${{ env.WORKING_DIR }}\`*`;
+            
+            // 2. Post the comment
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+      - name: 🛑 Exit on Plan Failure
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+  # ========================================================
+  # STAGE 3: APPLICATION (Runs on Merge)
+  # Purpose: Apply changes to the live environment.
+  # ========================================================
+  apply:
+    name: "🚀 Infrastructure Apply"
+    needs: compliance
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIR }}
+
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🔐 Authenticate to AWS (OIDC - Admin)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.IAM_ROLE_APPLY }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActionsApplySession
+
+      - name: 🔧 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: 🏗️ Terraform Init
+        run: terraform init -no-color
+
+      - name: 🚀 Terraform Apply
+        run: terraform apply -auto-approve -input=false
